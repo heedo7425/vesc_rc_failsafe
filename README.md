@@ -102,9 +102,10 @@ ros2 run vesc_driver vesc_driver_node --ros-args \
 
 ## 3. `/rc/state` 토픽
 
-`std_msgs/Float64MultiArray`, `data = [mode, servo, steer, throttle]`
+`std_msgs/Float64MultiArray`, `data = [mode, servo, steer, throttle, speed_ms]`
 - mode: 0=정지/disarm, 1=수동(RC), 2=자동(컴퓨터), 3=자동-폴백(RC)
 - servo: 0.0~1.0 (적용된 서보), steer/throttle: -1.0~1.0 (RC 원값)
+- speed_ms: 차량 속도 (텔레메트리 ERPM / speed_to_erpm_gain, 수동 포함 모든 모드)
 
 ```bash
 ros2 topic echo /rc/state     # 스틱/스위치 움직이면 값 변함

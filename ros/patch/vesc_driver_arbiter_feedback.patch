@@ -1,5 +1,5 @@
 diff --git a/src/mac/vesc/vesc_driver/include/vesc_driver/vesc_driver.hpp b/src/mac/vesc/vesc_driver/include/vesc_driver/vesc_driver.hpp
-index a48656f..9456ea6 100644
+index a48656f..2e9e8bf 100644
 --- a/src/mac/vesc/vesc_driver/include/vesc_driver/vesc_driver.hpp
 +++ b/src/mac/vesc/vesc_driver/include/vesc_driver/vesc_driver.hpp
 @@ -38,6 +38,7 @@
@@ -10,15 +10,18 @@ index a48656f..9456ea6 100644
  #include <vesc_msgs/msg/vesc_state.hpp>
  #include <vesc_msgs/msg/vesc_state_stamped.hpp>
  #include <vesc_msgs/msg/vesc_imu.hpp>
-@@ -97,6 +98,11 @@ private:
+@@ -97,6 +98,14 @@ private:
    rclcpp::Publisher<Imu>::SharedPtr imu_std_pub_;
  
    rclcpp::Publisher<Float64>::SharedPtr servo_sensor_pub_;
 +
 +  // RC-failsafe arbiter feedback (from firmware custom app data)
-+  // /rc/state : Float64MultiArray, data = [mode, servo(0..1), steer(-1..1), throttle(-1..1)]
++  // /rc/state : Float64MultiArray, data = [mode, servo(0..1), steer(-1..1), throttle(-1..1), speed_ms]
 +  //   mode: 0=disarm/stop, 1=manual(RC), 2=auto(computer), 3=auto-failover(RC)
++  //   speed_ms: vehicle speed from telemetry ERPM / speed_to_erpm_gain (works in every mode)
 +  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr rc_state_pub_;
++  double speed_to_erpm_gain_ = 1875.0;   // ERPM = speed[m/s] * gain
++  double last_erpm_ = 0.0;               // cached from telemetry (Values packet)
    rclcpp::SubscriptionBase::SharedPtr duty_cycle_sub_;
    rclcpp::SubscriptionBase::SharedPtr current_sub_;
    rclcpp::SubscriptionBase::SharedPtr brake_sub_;
@@ -55,21 +58,30 @@ index 950ad91..0981d6d 100644
  {
  public:
 diff --git a/src/mac/vesc/vesc_driver/src/vesc_driver.cpp b/src/mac/vesc/vesc_driver/src/vesc_driver.cpp
-index 43698af..adac633 100644
+index 43698af..bc1d405 100644
 --- a/src/mac/vesc/vesc_driver/src/vesc_driver.cpp
 +++ b/src/mac/vesc/vesc_driver/src/vesc_driver.cpp
-@@ -87,6 +87,10 @@ VescDriver::VescDriver(const rclcpp::NodeOptions & options)
+@@ -87,6 +87,11 @@ VescDriver::VescDriver(const rclcpp::NodeOptions & options)
    servo_sensor_pub_ = create_publisher<Float64>(
      "sensors/servo_position_command", rclcpp::QoS{10});
  
 +  // RC-failsafe arbiter feedback (from firmware custom app data)
-+  // one topic: /rc/state = [mode, servo, steer, throttle]
++  // one topic: /rc/state = [mode, servo, steer, throttle, speed_ms]
++  speed_to_erpm_gain_ = declare_parameter<double>("speed_to_erpm_gain", 1875.0);
 +  rc_state_pub_ = create_publisher<std_msgs::msg::Float64MultiArray>("rc/state", rclcpp::QoS{10});
 +
    // subscribe to motor and servo command topics
    duty_cycle_sub_ = create_subscription<Float64>(
      "commands/motor/duty_cycle", rclcpp::QoS{10}, std::bind(
-@@ -247,6 +251,16 @@ void VescDriver::vescPacketCallback(const std::shared_ptr<VescPacket const> & pa
+@@ -170,6 +175,7 @@ void VescDriver::vescPacketCallback(const std::shared_ptr<VescPacket const> & pa
+     state_msg.state.avg_iq = values->avg_iq();
+     state_msg.state.duty_cycle = values->duty_cycle_now();
+     state_msg.state.speed = values->rpm();
++    last_erpm_ = values->rpm();   // cache for /rc/state m/s (published in every mode)
+ 
+     state_msg.state.charge_drawn = values->amp_hours();
+     state_msg.state.charge_regen = values->amp_hours_charged();
+@@ -247,6 +253,18 @@ void VescDriver::vescPacketCallback(const std::shared_ptr<VescPacket const> & pa
  
      imu_pub_->publish(imu_msg);
      imu_std_pub_->publish(std_imu_msg);
@@ -79,8 +91,10 @@ index 43698af..adac633 100644
 +    // feedback packets are unsolicited and can arrive before the ctor finishes,
 +    // so guard against a not-yet-created publisher.
 +    if (fb && fb->valid() && rc_state_pub_) {
++      double speed_ms = (speed_to_erpm_gain_ != 0.0) ? last_erpm_ / speed_to_erpm_gain_ : 0.0;
 +      std_msgs::msg::Float64MultiArray msg;
-+      msg.data = {static_cast<double>(fb->mode()), fb->servo(), fb->steer(), fb->throttle()};
++      msg.data = {static_cast<double>(fb->mode()), fb->servo(), fb->steer(),
++        fb->throttle(), speed_ms};
 +      rc_state_pub_->publish(msg);
 +    }
    }
