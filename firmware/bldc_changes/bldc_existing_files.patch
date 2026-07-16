@@ -1,0 +1,125 @@
+diff --git a/applications/app.h b/applications/app.h
+index c687645f..7648c5ba 100644
+--- a/applications/app.h
++++ b/applications/app.h
+@@ -88,4 +88,15 @@ void app_custom_start(void);
+ void app_custom_stop(void);
+ void app_custom_configure(app_configuration *conf);
+ 
++// RC-failsafe arbiter (app_custom.c) <-> comm gate (commands.c)
++// When the arbiter is driving (manual mode or auto-failover), computer
++// motor/servo commands over comm are ignored so there is a single writer.
++bool app_arbiter_blocks_comm(void);
++// Called by commands.c whenever a motor/servo command arrives over comm,
++// so the arbiter can detect computer liveness for auto-failover.
++void app_arbiter_report_comm_cmd(void);
++// Called by commands.c when a servo command is applied (auto passthrough), so
++// the arbiter reports the actual servo position back to the PC in every mode.
++void app_arbiter_note_servo(float pos);
++
+ #endif /* APP_H_ */
+diff --git a/comm/commands.c b/comm/commands.c
+index 145952dd..dac016a0 100644
+--- a/comm/commands.c
++++ b/comm/commands.c
+@@ -484,26 +484,38 @@ void commands_process_packet(unsigned char *data, unsigned int len,
+ 
+ 	case COMM_SET_DUTY: {
+ 		int32_t ind = 0;
+-		mc_interface_set_duty((float)buffer_get_int32(data, &ind) / 100000.0);
+-		timeout_reset();
++		app_arbiter_report_comm_cmd();
++		if (!app_arbiter_blocks_comm()) {
++			mc_interface_set_duty((float)buffer_get_int32(data, &ind) / 100000.0);
++			timeout_reset();
++		}
+ 	} break;
+ 
+ 	case COMM_SET_CURRENT: {
+ 		int32_t ind = 0;
+-		mc_interface_set_current((float)buffer_get_int32(data, &ind) / 1000.0);
+-		timeout_reset();
++		app_arbiter_report_comm_cmd();
++		if (!app_arbiter_blocks_comm()) {
++			mc_interface_set_current((float)buffer_get_int32(data, &ind) / 1000.0);
++			timeout_reset();
++		}
+ 	} break;
+ 
+ 	case COMM_SET_CURRENT_BRAKE: {
+ 		int32_t ind = 0;
+-		mc_interface_set_brake_current((float)buffer_get_int32(data, &ind) / 1000.0);
+-		timeout_reset();
++		app_arbiter_report_comm_cmd();
++		if (!app_arbiter_blocks_comm()) {
++			mc_interface_set_brake_current((float)buffer_get_int32(data, &ind) / 1000.0);
++			timeout_reset();
++		}
+ 	} break;
+ 
+ 	case COMM_SET_RPM: {
+ 		int32_t ind = 0;
+-		mc_interface_set_pid_speed((float)buffer_get_int32(data, &ind));
+-		timeout_reset();
++		app_arbiter_report_comm_cmd();
++		if (!app_arbiter_blocks_comm()) {
++			mc_interface_set_pid_speed((float)buffer_get_int32(data, &ind));
++			timeout_reset();
++		}
+ 	} break;
+ 
+ 	case COMM_SET_POS: {
+@@ -514,8 +526,11 @@ void commands_process_packet(unsigned char *data, unsigned int len,
+ 
+ 	case COMM_SET_HANDBRAKE: {
+ 		int32_t ind = 0;
+-		mc_interface_set_handbrake(buffer_get_float32(data, 1e3, &ind));
+-		timeout_reset();
++		app_arbiter_report_comm_cmd();
++		if (!app_arbiter_blocks_comm()) {
++			mc_interface_set_handbrake(buffer_get_float32(data, 1e3, &ind));
++			timeout_reset();
++		}
+ 	} break;
+ 
+ 	case COMM_SET_DETECT: {
+@@ -534,7 +549,12 @@ void commands_process_packet(unsigned char *data, unsigned int len,
+ 
+ 	case COMM_SET_SERVO_POS: {
+ 		int32_t ind = 0;
+-		pwm_servo_set_servo_out(buffer_get_float16(data, 1000.0, &ind));
++		app_arbiter_report_comm_cmd();
++		if (!app_arbiter_blocks_comm()) {
++			float pos = buffer_get_float16(data, 1000.0, &ind);
++			pwm_servo_set_servo_out(pos);
++			app_arbiter_note_servo(pos);
++		}
+ 	} break;
+ 
+ 	case COMM_SET_MCCONF: {
+@@ -1165,8 +1185,11 @@ void commands_process_packet(unsigned char *data, unsigned int len,
+ 
+ 	case COMM_SET_CURRENT_REL: {
+ 		int32_t ind = 0;
+-		mc_interface_set_current_rel(buffer_get_float32(data, 1e5, &ind));
+-		timeout_reset();
++		app_arbiter_report_comm_cmd();
++		if (!app_arbiter_blocks_comm()) {
++			mc_interface_set_current_rel(buffer_get_float32(data, 1e5, &ind));
++			timeout_reset();
++		}
+ 	} break;
+ 
+ 	case COMM_CAN_FWD_FRAME: {
+diff --git a/conf_general.h b/conf_general.h
+index b88334ee..258dc828 100755
+--- a/conf_general.h
++++ b/conf_general.h
+@@ -82,6 +82,7 @@
+  */
+ //#define APP_CUSTOM_TO_USE			"app_custom_template.c"
+ //#define APP_CUSTOM_TO_USE			"app_motor_heater.c"
++#define APP_CUSTOM_TO_USE			"app_arbiter.c"		// RC-failsafe arbiter
+ //#include "er/app_erockit_conf_v2.h"
+ //#include "finn/app_finn_az_conf.h"
+ 

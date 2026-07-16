@@ -1,0 +1,120 @@
+diff --git a/src/mac/vesc/vesc_driver/include/vesc_driver/vesc_driver.hpp b/src/mac/vesc/vesc_driver/include/vesc_driver/vesc_driver.hpp
+index a48656f..9456ea6 100644
+--- a/src/mac/vesc/vesc_driver/include/vesc_driver/vesc_driver.hpp
++++ b/src/mac/vesc/vesc_driver/include/vesc_driver/vesc_driver.hpp
+@@ -38,6 +38,7 @@
+ #include <rclcpp/rclcpp.hpp>
+ #include <sensor_msgs/msg/imu.hpp>
+ #include <std_msgs/msg/float64.hpp>
++#include <std_msgs/msg/float64_multi_array.hpp>
+ #include <vesc_msgs/msg/vesc_state.hpp>
+ #include <vesc_msgs/msg/vesc_state_stamped.hpp>
+ #include <vesc_msgs/msg/vesc_imu.hpp>
+@@ -97,6 +98,11 @@ private:
+   rclcpp::Publisher<Imu>::SharedPtr imu_std_pub_;
+ 
+   rclcpp::Publisher<Float64>::SharedPtr servo_sensor_pub_;
++
++  // RC-failsafe arbiter feedback (from firmware custom app data)
++  // /rc/state : Float64MultiArray, data = [mode, servo(0..1), steer(-1..1), throttle(-1..1)]
++  //   mode: 0=disarm/stop, 1=manual(RC), 2=auto(computer), 3=auto-failover(RC)
++  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr rc_state_pub_;
+   rclcpp::SubscriptionBase::SharedPtr duty_cycle_sub_;
+   rclcpp::SubscriptionBase::SharedPtr current_sub_;
+   rclcpp::SubscriptionBase::SharedPtr brake_sub_;
+diff --git a/src/mac/vesc/vesc_driver/include/vesc_driver/vesc_packet.hpp b/src/mac/vesc/vesc_driver/include/vesc_driver/vesc_packet.hpp
+index 950ad91..0981d6d 100644
+--- a/src/mac/vesc/vesc_driver/include/vesc_driver/vesc_packet.hpp
++++ b/src/mac/vesc/vesc_driver/include/vesc_driver/vesc_packet.hpp
+@@ -135,6 +135,27 @@ private:
+   uint8_t devVersion_;
+ };
+ 
++// RC-failsafe arbiter feedback (custom app data from firmware).
++// Payload after the COMM id: [0xA5, mode, servo(i16 x1000), steer(i16 x1000), thr(i16 x1000)]
++class VescPacketCustomApp : public VescPacket
++{
++public:
++  explicit VescPacketCustomApp(std::shared_ptr<VescFrame> raw);
++
++  bool   valid()    const;   ///< marker 0xA5 present
++  int    mode()     const;   ///< 0 disarm, 1 manual, 2 auto, 3 auto-failover(RC)
++  double servo()    const;   ///< applied servo position 0..1
++  double steer()    const;   ///< RC steering -1..1
++  double throttle() const;   ///< RC throttle -1..1
++
++private:
++  bool valid_;
++  int mode_;
++  double servo_;
++  double steer_;
++  double throttle_;
++};
++
+ class VescPacketRequestFWVersion : public VescPacket
+ {
+ public:
+diff --git a/src/mac/vesc/vesc_driver/src/vesc_driver.cpp b/src/mac/vesc/vesc_driver/src/vesc_driver.cpp
+index 43698af..adac633 100644
+--- a/src/mac/vesc/vesc_driver/src/vesc_driver.cpp
++++ b/src/mac/vesc/vesc_driver/src/vesc_driver.cpp
+@@ -87,6 +87,10 @@ VescDriver::VescDriver(const rclcpp::NodeOptions & options)
+   servo_sensor_pub_ = create_publisher<Float64>(
+     "sensors/servo_position_command", rclcpp::QoS{10});
+ 
++  // RC-failsafe arbiter feedback (from firmware custom app data)
++  // one topic: /rc/state = [mode, servo, steer, throttle]
++  rc_state_pub_ = create_publisher<std_msgs::msg::Float64MultiArray>("rc/state", rclcpp::QoS{10});
++
+   // subscribe to motor and servo command topics
+   duty_cycle_sub_ = create_subscription<Float64>(
+     "commands/motor/duty_cycle", rclcpp::QoS{10}, std::bind(
+@@ -247,6 +251,16 @@ void VescDriver::vescPacketCallback(const std::shared_ptr<VescPacket const> & pa
+ 
+     imu_pub_->publish(imu_msg);
+     imu_std_pub_->publish(std_imu_msg);
++  } else if (packet->name() == "CustomApp") {
++    std::shared_ptr<VescPacketCustomApp const> fb =
++      std::dynamic_pointer_cast<VescPacketCustomApp const>(packet);
++    // feedback packets are unsolicited and can arrive before the ctor finishes,
++    // so guard against a not-yet-created publisher.
++    if (fb && fb->valid() && rc_state_pub_) {
++      std_msgs::msg::Float64MultiArray msg;
++      msg.data = {static_cast<double>(fb->mode()), fb->servo(), fb->steer(), fb->throttle()};
++      rc_state_pub_->publish(msg);
++    }
+   }
+   auto & clk = *this->get_clock();
+   RCLCPP_DEBUG_THROTTLE(
+diff --git a/src/mac/vesc/vesc_driver/src/vesc_packet.cpp b/src/mac/vesc/vesc_driver/src/vesc_packet.cpp
+index b9ab26f..63615a6 100644
+--- a/src/mac/vesc/vesc_driver/src/vesc_packet.cpp
++++ b/src/mac/vesc/vesc_driver/src/vesc_packet.cpp
+@@ -149,6 +149,27 @@ uint8_t VescPacketFWVersion::devVersion() const
+ 
+ REGISTER_PACKET_TYPE(COMM_FW_VERSION, VescPacketFWVersion)
+ 
++VescPacketCustomApp::VescPacketCustomApp(std::shared_ptr<VescFrame> raw)
++: VescPacket("CustomApp", raw)
++{
++  // payload_.first[0] = COMM id; data starts at +1
++  valid_ = (*(payload_.first + 1) == 0xA5);
++  mode_ = *(payload_.first + 2);
++  uint16_t sv = (static_cast<uint16_t>(*(payload_.first + 3)) << 8) | *(payload_.first + 4);
++  uint16_t st = (static_cast<uint16_t>(*(payload_.first + 5)) << 8) | *(payload_.first + 6);
++  uint16_t th = (static_cast<uint16_t>(*(payload_.first + 7)) << 8) | *(payload_.first + 8);
++  servo_    = static_cast<int16_t>(sv) / 1000.0;
++  steer_    = static_cast<int16_t>(st) / 1000.0;
++  throttle_ = static_cast<int16_t>(th) / 1000.0;
++}
++bool   VescPacketCustomApp::valid()    const {return valid_;}
++int    VescPacketCustomApp::mode()     const {return mode_;}
++double VescPacketCustomApp::servo()    const {return servo_;}
++double VescPacketCustomApp::steer()    const {return steer_;}
++double VescPacketCustomApp::throttle() const {return throttle_;}
++
++REGISTER_PACKET_TYPE(COMM_CUSTOM_APP_DATA, VescPacketCustomApp)
++
+ VescPacketRequestFWVersion::VescPacketRequestFWVersion()
+ : VescPacket("RequestFWVersion", 1, COMM_FW_VERSION)
+ {
