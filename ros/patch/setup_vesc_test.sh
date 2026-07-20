@@ -30,7 +30,7 @@ cp -r "$VM" vesc_msgs
 cp -r "$VD" vesc_driver
 cp -r "$TD" transport_drivers
 
-( cd vesc_driver && git apply -p1 "$PATCH" )   # 패키지 상대경로 패치
+( cd vesc_driver && patch -p1 --forward --no-backup-if-mismatch < "$PATCH" )   # 패키지 상대경로 패치
 echo "[setup] 패치 적용됨. 빌드 시작..."
 
 cd "$TGT"
