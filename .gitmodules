@@ -1,0 +1,4 @@
+[submodule "bldc"]
+	path = bldc
+	url = https://github.com/heedo7425/bldc.git
+	branch = feat/rc-failsafe-arbiter
