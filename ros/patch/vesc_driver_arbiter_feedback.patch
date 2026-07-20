@@ -1,7 +1,7 @@
-diff --git a/src/mac/vesc/vesc_driver/include/vesc_driver/vesc_driver.hpp b/src/mac/vesc/vesc_driver/include/vesc_driver/vesc_driver.hpp
+diff --git a/include/vesc_driver/vesc_driver.hpp b/include/vesc_driver/vesc_driver.hpp
 index a48656f..2e9e8bf 100644
---- a/src/mac/vesc/vesc_driver/include/vesc_driver/vesc_driver.hpp
-+++ b/src/mac/vesc/vesc_driver/include/vesc_driver/vesc_driver.hpp
+--- a/include/vesc_driver/vesc_driver.hpp
++++ b/include/vesc_driver/vesc_driver.hpp
 @@ -38,6 +38,7 @@
  #include <rclcpp/rclcpp.hpp>
  #include <sensor_msgs/msg/imu.hpp>
@@ -25,10 +25,10 @@ index a48656f..2e9e8bf 100644
    rclcpp::SubscriptionBase::SharedPtr duty_cycle_sub_;
    rclcpp::SubscriptionBase::SharedPtr current_sub_;
    rclcpp::SubscriptionBase::SharedPtr brake_sub_;
-diff --git a/src/mac/vesc/vesc_driver/include/vesc_driver/vesc_packet.hpp b/src/mac/vesc/vesc_driver/include/vesc_driver/vesc_packet.hpp
+diff --git a/include/vesc_driver/vesc_packet.hpp b/include/vesc_driver/vesc_packet.hpp
 index 950ad91..0981d6d 100644
---- a/src/mac/vesc/vesc_driver/include/vesc_driver/vesc_packet.hpp
-+++ b/src/mac/vesc/vesc_driver/include/vesc_driver/vesc_packet.hpp
+--- a/include/vesc_driver/vesc_packet.hpp
++++ b/include/vesc_driver/vesc_packet.hpp
 @@ -135,6 +135,27 @@ private:
    uint8_t devVersion_;
  };
@@ -57,10 +57,10 @@ index 950ad91..0981d6d 100644
  class VescPacketRequestFWVersion : public VescPacket
  {
  public:
-diff --git a/src/mac/vesc/vesc_driver/src/vesc_driver.cpp b/src/mac/vesc/vesc_driver/src/vesc_driver.cpp
+diff --git a/src/vesc_driver.cpp b/src/vesc_driver.cpp
 index 43698af..bc1d405 100644
---- a/src/mac/vesc/vesc_driver/src/vesc_driver.cpp
-+++ b/src/mac/vesc/vesc_driver/src/vesc_driver.cpp
+--- a/src/vesc_driver.cpp
++++ b/src/vesc_driver.cpp
 @@ -87,6 +87,11 @@ VescDriver::VescDriver(const rclcpp::NodeOptions & options)
    servo_sensor_pub_ = create_publisher<Float64>(
      "sensors/servo_position_command", rclcpp::QoS{10});
@@ -100,10 +100,10 @@ index 43698af..bc1d405 100644
    }
    auto & clk = *this->get_clock();
    RCLCPP_DEBUG_THROTTLE(
-diff --git a/src/mac/vesc/vesc_driver/src/vesc_packet.cpp b/src/mac/vesc/vesc_driver/src/vesc_packet.cpp
+diff --git a/src/vesc_packet.cpp b/src/vesc_packet.cpp
 index b9ab26f..63615a6 100644
---- a/src/mac/vesc/vesc_driver/src/vesc_packet.cpp
-+++ b/src/mac/vesc/vesc_driver/src/vesc_packet.cpp
+--- a/src/vesc_packet.cpp
++++ b/src/vesc_packet.cpp
 @@ -149,6 +149,27 @@ uint8_t VescPacketFWVersion::devVersion() const
  
  REGISTER_PACKET_TYPE(COMM_FW_VERSION, VescPacketFWVersion)
